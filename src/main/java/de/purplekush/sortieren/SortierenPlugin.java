@@ -33,32 +33,51 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Legt beim Öffnen einer Kiste einen Sortier-Knopf in den letzten Slot.
- * Der Gegenstand, der dort eigentlich lag, wird im Knopf selbst gespeichert
+ * Legt beim Öffnen einer Kiste drei Sortier-Knöpfe in die letzten drei Slots.
+ * Die Gegenstände, die dort eigentlich lagen, werden in den Knöpfen selbst gespeichert
  * und beim Schließen zurückgelegt. So geht nichts verloren, auch nicht bei einem Absturz.
  */
 public class SortierenPlugin extends JavaPlugin implements Listener {
 
     private static final LegacyComponentSerializer FARBEN = LegacyComponentSerializer.legacyAmpersand();
+    private static final int KNOEPFE = 3;
+
+    private enum Modus {
+        NAME("name", Material.NAME_TAG),
+        KATEGORIE("kategorie", Material.CHEST),
+        MENGE("menge", Material.HOPPER);
+
+        final String configKey;
+        final Material standard;
+
+        Modus(String configKey, Material standard) {
+            this.configKey = configKey;
+            this.standard = standard;
+        }
+    }
 
     private NamespacedKey knopfKey;
     private NamespacedKey originalKey;
-    private Material knopfMaterial;
-    private String knopfName;
-    private List<String> knopfLore;
     private boolean ton;
+
+    private final Material[] material = new Material[KNOEPFE];
+    private final String[] namen = new String[KNOEPFE];
+    private final List<List<String>> lores = new ArrayList<>();
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
         knopfKey = new NamespacedKey(this, "sortier_knopf");
         originalKey = new NamespacedKey(this, "original_item");
-
-        Material m = Material.matchMaterial(getConfig().getString("knopf.material", "HOPPER"));
-        knopfMaterial = (m == null || m.isAir() || !m.isItem()) ? Material.HOPPER : m;
-        knopfName = getConfig().getString("knopf.name", "&d&lSortieren");
-        knopfLore = getConfig().getStringList("knopf.lore");
         ton = getConfig().getBoolean("ton", true);
+
+        for (Modus m : Modus.values()) {
+            String pfad = "knoepfe." + m.configKey + ".";
+            Material mat = Material.matchMaterial(getConfig().getString(pfad + "material", m.standard.name()));
+            material[m.ordinal()] = (mat == null || mat.isAir() || !mat.isItem()) ? m.standard : mat;
+            namen[m.ordinal()] = getConfig().getString(pfad + "name", m.name());
+            lores.add(getConfig().getStringList(pfad + "lore"));
+        }
 
         getServer().getPluginManager().registerEvents(this, this);
     }
@@ -69,7 +88,7 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
         for (Player p : getServer().getOnlinePlayers()) {
             Inventory top = p.getOpenInventory().getTopInventory();
             if (istKiste(top)) {
-                entferneKnopf(top);
+                entferneKnoepfe(top);
             }
         }
     }
@@ -101,6 +120,17 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
         return item.getItemMeta().getPersistentDataContainer().has(knopfKey, PersistentDataType.BYTE);
     }
 
+    private Modus leseModus(ItemStack knopf) {
+        if (!istKnopf(knopf)) {
+            return null;
+        }
+        Byte b = knopf.getItemMeta().getPersistentDataContainer().get(knopfKey, PersistentDataType.BYTE);
+        if (b == null || b < 0 || b >= Modus.values().length) {
+            return null;
+        }
+        return Modus.values()[b];
+    }
+
     private ItemStack leseOriginal(ItemStack knopf) {
         if (knopf == null || !knopf.hasItemMeta()) {
             return null;
@@ -118,16 +148,17 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private ItemStack baueKnopf(ItemStack original) {
-        ItemStack item = new ItemStack(knopfMaterial);
+    private ItemStack baueKnopf(Modus modus, ItemStack original) {
+        int i = modus.ordinal();
+        ItemStack item = new ItemStack(material[i]);
         ItemMeta meta = item.getItemMeta();
-        meta.displayName(FARBEN.deserialize(knopfName).decoration(TextDecoration.ITALIC, false));
+        meta.displayName(FARBEN.deserialize(namen[i]).decoration(TextDecoration.ITALIC, false));
         List<Component> lore = new ArrayList<>();
-        for (String zeile : knopfLore) {
+        for (String zeile : lores.get(i)) {
             lore.add(FARBEN.deserialize(zeile).decoration(TextDecoration.ITALIC, false));
         }
         meta.lore(lore);
-        meta.getPersistentDataContainer().set(knopfKey, PersistentDataType.BYTE, (byte) 1);
+        meta.getPersistentDataContainer().set(knopfKey, PersistentDataType.BYTE, (byte) i);
         if (original != null && !original.getType().isAir()) {
             meta.getPersistentDataContainer().set(originalKey, PersistentDataType.BYTE_ARRAY,
                     original.serializeAsBytes());
@@ -136,7 +167,7 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
         return item;
     }
 
-    private void entferneKnopf(Inventory inv) {
+    private void entferneKnoepfe(Inventory inv) {
         for (int i = 0; i < inv.getSize(); i++) {
             ItemStack item = inv.getItem(i);
             if (istKnopf(item)) {
@@ -162,18 +193,21 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
             return;
         }
         Inventory inv = event.getInventory();
-        if (!istKiste(inv) || inv.getSize() < 9) {
+        if (!istKiste(inv) || inv.getSize() < 27) {
             return;
         }
         if (andereBetrachter(inv, player)) {
-            return; // Knopf liegt schon, wenn ein anderer Spieler die Kiste offen hat
+            return; // Knöpfe liegen schon, wenn ein anderer Spieler die Kiste offen hat
         }
 
-        int letzter = inv.getSize() - 1;
-        ItemStack vorhanden = inv.getItem(letzter);
-        // Falls nach einem Absturz noch ein alter Knopf liegt, dessen Inhalt übernehmen
-        ItemStack original = istKnopf(vorhanden) ? leseOriginal(vorhanden) : vorhanden;
-        inv.setItem(letzter, baueKnopf(original));
+        int start = inv.getSize() - KNOEPFE;
+        for (Modus m : Modus.values()) {
+            int slot = start + m.ordinal();
+            ItemStack vorhanden = inv.getItem(slot);
+            // Falls nach einem Absturz noch ein alter Knopf liegt, dessen Inhalt übernehmen
+            ItemStack original = istKnopf(vorhanden) ? leseOriginal(vorhanden) : vorhanden;
+            inv.setItem(slot, baueKnopf(m, original));
+        }
     }
 
     @EventHandler
@@ -185,7 +219,7 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
         if (event.getPlayer() instanceof Player player && andereBetrachter(inv, player)) {
             return; // erst aufräumen, wenn der letzte Spieler schließt
         }
-        entferneKnopf(inv);
+        entferneKnoepfe(inv);
     }
 
     // ------------------------------------------------------------------
@@ -198,7 +232,9 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
             return;
         }
         ItemStack aktuell = event.getCurrentItem();
-        if (!istKnopf(aktuell)) {
+        Modus modus = leseModus(aktuell);
+        if (modus == null) {
+            // Auch ein Tausch per Zifferntaste auf einen Knopf-Slot ist verboten
             return;
         }
         // Den Knopf kann man nie herausnehmen, verschieben oder tauschen
@@ -209,10 +245,10 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
             return;
         }
         if (event.getClick().isLeftClick()) {
-            sortiereKiste(top, player);
+            sortiereKiste(top, player, modus);
             klick(player);
         } else if (event.getClick().isRightClick()) {
-            sortiereInventar(player);
+            sortiereInventar(player, modus);
             klick(player);
         }
     }
@@ -223,9 +259,11 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
         if (!istKiste(top)) {
             return;
         }
-        int letzter = top.getSize() - 1;
-        if (istKnopf(top.getItem(letzter)) && event.getRawSlots().contains(letzter)) {
-            event.setCancelled(true);
+        for (int slot : event.getRawSlots()) {
+            if (slot < top.getSize() && istKnopf(top.getItem(slot))) {
+                event.setCancelled(true);
+                return;
+            }
         }
     }
 
@@ -236,7 +274,7 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
     }
 
     // ------------------------------------------------------------------
-    // Schutz des Knopfs (Trichter, Drops)
+    // Schutz der Knöpfe (Trichter, Drops)
     // ------------------------------------------------------------------
 
     @EventHandler(ignoreCancelled = true)
@@ -263,50 +301,51 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
     // Sortieren
     // ------------------------------------------------------------------
 
-    private void sortiereKiste(Inventory inv, Player player) {
-        int letzter = inv.getSize() - 1;
-        ItemStack knopf = inv.getItem(letzter);
-        ItemStack original = leseOriginal(knopf);
+    private void sortiereKiste(Inventory inv, Player player, Modus modus) {
+        int start = inv.getSize() - KNOEPFE;
 
         List<ItemStack> items = new ArrayList<>();
-        for (int i = 0; i < letzter; i++) {
+        for (int i = 0; i < start; i++) {
             items.add(inv.getItem(i));
         }
-        if (original != null) {
-            items.add(original);
+        // Was unter den Knöpfen versteckt liegt, kommt mit in die Sortierung
+        for (int i = start; i < inv.getSize(); i++) {
+            items.add(leseOriginal(inv.getItem(i)));
         }
 
-        List<ItemStack> sortiert = mischeUndSortiere(items);
+        List<ItemStack> sortiert = mischeUndSortiere(items, modus);
 
-        for (int i = 0; i < letzter; i++) {
+        for (int i = 0; i < start; i++) {
             inv.setItem(i, i < sortiert.size() ? sortiert.get(i) : null);
         }
-        // Passt nach dem Zusammenfügen ein Stapel nicht mehr in die Kiste,
-        // wird er im Knopf aufbewahrt und beim Schließen in den letzten Slot gelegt.
-        ItemStack rest = sortiert.size() > letzter ? sortiert.get(letzter) : null;
-        inv.setItem(letzter, baueKnopf(rest));
-
-        for (int i = letzter + 1; i < sortiert.size(); i++) {
+        // Passt nach dem Zusammenfügen etwas nicht mehr in die Kiste,
+        // wird es in den Knöpfen aufbewahrt und beim Schließen zurückgelegt.
+        for (Modus m : Modus.values()) {
+            int index = start + m.ordinal();
+            ItemStack rest = index < sortiert.size() ? sortiert.get(index) : null;
+            inv.setItem(index, baueKnopf(m, rest));
+        }
+        for (int i = inv.getSize(); i < sortiert.size(); i++) {
             player.getWorld().dropItemNaturally(player.getLocation(), sortiert.get(i));
         }
     }
 
-    private void sortiereInventar(Player player) {
+    private void sortiereInventar(Player player, Modus modus) {
         PlayerInventory pi = player.getInventory();
         // Nur das Hauptinventar (Slots 9-35), Hotbar und Rüstung bleiben unberührt
         List<ItemStack> items = new ArrayList<>();
         for (int i = 9; i <= 35; i++) {
             items.add(pi.getItem(i));
         }
-        List<ItemStack> sortiert = mischeUndSortiere(items);
+        List<ItemStack> sortiert = mischeUndSortiere(items, modus);
         for (int i = 9; i <= 35; i++) {
             int index = i - 9;
             pi.setItem(i, index < sortiert.size() ? sortiert.get(index) : null);
         }
     }
 
-    /** Fügt gleiche Gegenstände zu vollen Stapeln zusammen und sortiert nach Name. */
-    private List<ItemStack> mischeUndSortiere(List<ItemStack> items) {
+    /** Fügt gleiche Gegenstände zu vollen Stapeln zusammen und sortiert nach dem gewählten Modus. */
+    private List<ItemStack> mischeUndSortiere(List<ItemStack> items, Modus modus) {
         List<ItemStack> gemischt = new ArrayList<>();
         for (ItemStack item : items) {
             if (item == null || item.getType().isAir() || istKnopf(item)) {
@@ -328,9 +367,42 @@ public class SortierenPlugin extends JavaPlugin implements Listener {
                 gemischt.add(rest);
             }
         }
-        gemischt.sort(Comparator
+
+        Comparator<ItemStack> nachName = Comparator
                 .comparing((ItemStack i) -> i.getType().getKey().getKey())
-                .thenComparingInt(i -> -i.getAmount()));
+                .thenComparingInt(i -> -i.getAmount());
+
+        switch (modus) {
+            case NAME -> gemischt.sort(nachName);
+            case KATEGORIE -> gemischt.sort(Comparator
+                    .comparingInt((ItemStack i) -> kategorie(i.getType()))
+                    .thenComparing(nachName));
+            case MENGE -> gemischt.sort(Comparator
+                    .comparingInt((ItemStack i) -> -i.getAmount())
+                    .thenComparing(nachName));
+        }
         return gemischt;
+    }
+
+    /** Kleinere Zahl = weiter vorne. */
+    private static int kategorie(Material m) {
+        String n = m.name();
+        if (n.endsWith("_SWORD") || n.endsWith("_PICKAXE") || n.endsWith("_AXE") || n.endsWith("_SHOVEL")
+                || n.endsWith("_HOE") || n.equals("BOW") || n.equals("CROSSBOW") || n.equals("TRIDENT")
+                || n.equals("MACE") || n.equals("SHIELD") || n.equals("FISHING_ROD") || n.equals("SHEARS")
+                || n.equals("FLINT_AND_STEEL") || n.equals("ELYTRA")) {
+            return 0; // Werkzeug und Waffen
+        }
+        if (n.endsWith("_HELMET") || n.endsWith("_CHESTPLATE") || n.endsWith("_LEGGINGS")
+                || n.endsWith("_BOOTS") || n.equals("TURTLE_HELMET")) {
+            return 1; // Rüstung
+        }
+        if (m.isEdible()) {
+            return 2; // Essen
+        }
+        if (m.isBlock()) {
+            return 3; // Blöcke
+        }
+        return 4; // alles andere
     }
 }
