@@ -1,0 +1,14 @@
+# PurpleKush-Sortieren
+# Der Knopf erscheint im letzten Slot (unten rechts) von Kisten, Fässern,
+# Shulkerkisten und Endertruhen. Farben mit & (z. B. &d = pink, &7 = grau).
+
+knopf:
+  # Aussehen des Knopfs (Material-Name, z. B. HOPPER, COMPARATOR, NAME_TAG)
+  material: HOPPER
+  name: "&d&lSortieren"
+  lore:
+    - "&7Linksklick: &fKiste sortieren"
+    - "&7Rechtsklick: &fInventar sortieren"
+
+# Klick-Geräusch beim Sortieren
+ton: true

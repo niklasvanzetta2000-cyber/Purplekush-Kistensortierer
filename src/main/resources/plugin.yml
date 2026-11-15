@@ -1,0 +1,6 @@
+name: PurpleKush-Sortieren
+version: ${project.version}
+main: de.purplekush.sortieren.SortierenPlugin
+api-version: "1.21"
+description: Sortier-Knopf im letzten Slot jeder Kiste (Linksklick Kiste, Rechtsklick Inventar).
+author: PurpleKush
